@@ -364,6 +364,9 @@ BM25 is the low-latency baseline retrieval path. Install `agent-memory-core[vect
 in the store's `[index]` configuration. `vector_model` defaults to
 `BAAI/bge-small-en-v1.5`. The first enabled Store loads FastEmbed/ONNX and may
 need network access to download the model; disabled stores never load FastEmbed.
+Set `AGENT_MEMORY_OFFLINE=1` to load strictly from the FastEmbed cache
+(`FASTEMBED_CACHE_PATH`, default `~/.cache/fastembed_cache` on most systems) —
+useful for air-gapped hosts or caches populated from a mirror.
 
 Run `mem --store /path/to/store rebuild` to rebuild the SQLite cache from Markdown.
 The existing indexing path catches changed and deleted files, enabling vectors
