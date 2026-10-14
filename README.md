@@ -381,6 +381,33 @@ a retrieval-coverage/latency trade-off. Fixed-context answer replays scored
 answer-level experiments do not establish an end-to-end accuracy improvement,
 so vector retrieval remains optional.
 
+## CJK (Chinese) memory
+
+The default tokenizer extracts ASCII literals only, and the FTS5 unicode61
+tokenizer keeps an unsegmented CJK run as one token, so a Chinese query matches
+nothing a Chinese body wrote. Install `agent-memory-core[cjk]` (or run
+`uv sync --extra cjk` from this workspace) and set `tokenizer = "cjk"` in the
+store's `[index]` configuration:
+
+```toml
+[index]
+tokenizer = "cjk"
+vector_enabled = true
+vector_model = "BAAI/bge-small-zh-v1.5"
+```
+
+`cjk` segments chunk text with jieba before it enters the FTS5 projection and
+adds CJK words (two or more characters) to the query expression; ASCII literals
+keep their current behavior. Headings stay untouched — they are read back from
+the surface. The tokenizer the projection was built with is recorded in
+`index_meta`; changing it is detected on the next sync and the whole projection
+rebuilds, so no stale FTS rows survive a switch. For paraphrased Chinese queries
+that share no surface tokens with the memory, pair the tokenizer with the
+optional vector index and a Chinese-capable model such as
+`BAAI/bge-small-zh-v1.5`. On a 5-memory / 10-query Chinese check, ASCII-only
+recall answered 2/10, the cjk tokenizer 9/10, and cjk plus Chinese vectors
+10/10.
+
 ## Explicit raw evidence reads
 
 `mem --json read <name>` includes a memory's provenance. To inspect a cited raw
