@@ -65,6 +65,7 @@ def distill(store: Store, session: str, messages: list[Message], ask: Ask) -> Di
             render.conversation(batch),
             slot_table=config.slot_table,
             event_lane=config.event_lane,
+            language=config.language,
         )
         outcome = agentic.negotiate(store, sheet, prompt, ask, config)
         sheet = outcome.sheet

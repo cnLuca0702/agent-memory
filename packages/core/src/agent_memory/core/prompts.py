@@ -237,16 +237,27 @@ SLOT_INSTRUCTION = """Go through the type table below one type at a time and wri
 memory the conversation supports for that type."""
 FREE_INSTRUCTION = """Write every memory the conversation supports, choosing for each the
 type from the table below that owns it."""
+LANGUAGE_INSTRUCTION = """Write every abstract and body in {language}. Keep code identifiers,
+commands, file paths, URLs, proper nouns and established technical terms exactly as they
+appear in the conversation."""
+
 EVENT_LANE = """Facts, decisions and preferences are the knowledge; events are the record of
 what happened, and each conversation yields at least one event."""
 
 
 def distill_sheet(
-    slots: str, sheet: str, conversation: str, slot_table: bool = True, event_lane: bool = True
+    slots: str,
+    sheet: str,
+    conversation: str,
+    slot_table: bool = True,
+    event_lane: bool = True,
+    language: str = "",
 ) -> str:
     instruction = SLOT_INSTRUCTION if slot_table else FREE_INSTRUCTION
     if event_lane:
         instruction += " " + EVENT_LANE
+    if language.strip():
+        instruction += " " + LANGUAGE_INSTRUCTION.format(language=language.strip())
     return DISTILL_SHEET.format(
         slot_instruction=instruction, slot_table=slots, sheet=sheet, conversation=conversation
     )
