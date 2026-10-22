@@ -189,7 +189,7 @@ def launch_distill(store: Store, session: str, host: str) -> bool:
     if not command:
         return False
     if command[0] == EXECUTOR_BINARY:
-        command[0] = _sibling(EXECUTOR_BINARY)
+        command[0] = detached.installed(EXECUTOR_BINARY)
     environment = {**os.environ, STORE_ENV_VAR: str(store.root), EXECUTOR_ENV_VAR: "1"}
     try:
         store.layout.state_dir.mkdir(parents=True, exist_ok=True)
@@ -206,11 +206,6 @@ def launch_distill(store: Store, session: str, host: str) -> bool:
         return False
     return True
 
-
-def _sibling(binary: str) -> str:
-    """Desktop clients run hooks without the user's shell PATH; the install directory is known."""
-    candidate = pathlib.Path(sys.executable).parent / binary
-    return str(candidate) if candidate.exists() else binary
 
 
 def _items(event: dict[str, object]) -> list[str]:

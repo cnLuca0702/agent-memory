@@ -1,6 +1,7 @@
 """A detached worker outlives the hook that launched it and opens no console window."""
 
 import os
+import pathlib
 import subprocess
 import sys
 import textwrap
@@ -45,3 +46,14 @@ def test_a_detached_worker_outlives_its_launcher(tmp_path):
     while not marker.exists() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert marker.exists()
+
+
+def test_installed_entry_points_resolve_without_the_user_path(monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    resolved = pathlib.Path(detached.installed("mem"))
+    assert resolved.is_file()
+    assert resolved.parent == pathlib.Path(sys.executable).parent
+
+
+def test_an_unknown_entry_point_is_left_for_the_caller_to_report():
+    assert detached.installed("no-such-agent-memory-binary") == "no-such-agent-memory-binary"

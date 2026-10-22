@@ -187,7 +187,7 @@ def skill_path(host: str, settings_path: pathlib.Path | None = None) -> pathlib.
 
 def mcp_binary() -> str:
     """Use the sibling entry point for the same reason hooks use an absolute path."""
-    return str(pathlib.Path(sys.executable).parent / MCP_COMMAND)
+    return str(pathlib.Path(sys.executable).parent / _entry_point(MCP_COMMAND))
 
 
 def _merge_json_mcp(

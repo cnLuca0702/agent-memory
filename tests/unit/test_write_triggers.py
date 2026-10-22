@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import shlex
+import sys
 
 import pytest
 from agent_memory.adapters import capture as capture_module
@@ -221,6 +222,17 @@ def test_the_launched_executor_call_is_one_the_cli_accepts(store, monkeypatch):
     expected_log = store.layout.state_dir / hook_entry.LOG_FILENAME
     assert pathlib.Path(launched["stdout"].name) == expected_log
     assert launched["stderr"] is launched["stdout"]
+
+
+def test_the_launched_executor_resolves_from_the_install_without_path(store, monkeypatch):
+    launched = {}
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr("subprocess.Popen", lambda command, **_: launched.update(command=command))
+
+    assert hook_entry.launch_distill(store, "session-x", moments.HOST_CLAUDE_CODE)
+    executable = pathlib.Path(launched["command"][0])
+    assert executable.is_file()
+    assert executable.parent == pathlib.Path(sys.executable).parent
 
 
 def test_a_hook_fired_inside_the_executor_session_does_nothing(store, monkeypatch, capsys):

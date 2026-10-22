@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import subprocess
-import sys
 
 from agent_memory.core import dreaming
 from agent_memory.core.config import (
@@ -44,8 +42,7 @@ def launch(store: Store, *, trigger_source: str = "hook") -> dreaming.ClaimResul
     if result.claim is None:
         return result
     claim = result.claim
-    binary = pathlib.Path(sys.executable).parent / EXECUTABLE
-    command = str(binary) if binary.exists() else EXECUTABLE
+    command = detached.installed(EXECUTABLE)
     environment = {**os.environ, STORE_ENV_VAR: str(store.root), EXECUTOR_ENV_VAR: "1"}
     try:
         store.layout.state_dir.mkdir(parents=True, exist_ok=True)
