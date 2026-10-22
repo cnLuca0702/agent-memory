@@ -20,6 +20,8 @@ from agent_memory.core.manage import Manage
 from agent_memory.core.reasoning import Reasoner
 from agent_memory.core.store import Store
 
+from . import detached
+
 LOG_FILENAME = "hooks.log"
 EXECUTABLE = "mem"
 COMMAND = "dream-worker"
@@ -59,7 +61,7 @@ def launch(store: Store, *, trigger_source: str = "hook") -> dreaming.ClaimResul
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
-                start_new_session=True,
+                **detached.options(),
             )
     except OSError as error:
         dreaming.mark_failed(store, claim.id, f"worker launch failed: {error}")

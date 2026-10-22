@@ -235,8 +235,8 @@ class ClaudeCodeDialect(Dialect):
             allowed,
             "--disallowedTools",
             CLAUDE_NATIVE_TOOLS,
-            "--system-prompt",
-            system_prompt,
+            "--system-prompt-file",
+            str(instructions_file),
         ]
 
     def command(
@@ -908,6 +908,7 @@ class Host:
         timeout_seconds: float | None = None,
     ) -> HostResult:
         started = time.monotonic()
+        command = [shutil.which(command[0]) or command[0], *command[1:]]
         evidence = environment.get(observation.ENV)
         attempt_id = str(time.time_ns())
 
