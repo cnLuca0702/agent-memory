@@ -944,6 +944,7 @@ class Host:
                     input=payload,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
                     timeout=timeout,
                     env=environment,
                     cwd=str(workdir) if workdir else None,
@@ -1107,6 +1108,7 @@ def _run_codex_jsonl(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
         env=environment,
         cwd=str(workdir) if workdir else None,
     )
