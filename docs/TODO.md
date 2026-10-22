@@ -55,6 +55,9 @@
 - Measure native-tool distillation on real boundaries and a write-side benchmark round. On one
   fixed supersede scenario, Haiku took a median 14 s in one process against 33 s for the text
   protocol (evidence: experiments/runs/native-tools-latency).
+- Haiku 4.5 sometimes closes a batch with nothing worth keeping in plain text instead of
+  submitting a Skip; the batch fails closed and succeeds on a later run (observed twice in three
+  Windows runs, 2026-10-22). Decide whether a no-submission answer should count as Skip.
 - Verify the Codex lifecycle hooks end to end, including the one-time hook trust review; the
   Codex Write executor is verified live, the hooks by unit tests only.
 
