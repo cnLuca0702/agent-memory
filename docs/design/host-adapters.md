@@ -72,7 +72,9 @@ legacy endpoint configuration are preserved.
 Hosts run on POSIX and on native Windows with one contract. Writer, coordination and
 observation locks keep the same shared/exclusive semantics on both; on Windows they occupy a
 byte range beyond any real file content, so a held lock never blocks ordinary reads or appends.
-Every hook is bounded by its configured timeout and exits cleanly. Detached distillation and
+Every entry point exchanges UTF-8 on stdio regardless of the platform code page, so
+non-ASCII memories survive pipes. Every hook is bounded by its configured timeout and exits
+cleanly. Detached distillation and
 Dream workers outlive the hook process and, on Windows, run without a console window so their
 host subprocesses open none either. Cron scheduling remains POSIX-only.
 

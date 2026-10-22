@@ -21,7 +21,7 @@ import traceback
 from collections.abc import Callable, Iterator, Sequence
 from types import FrameType
 
-from agent_memory.core import injection
+from agent_memory.core import injection, stdio
 from agent_memory.core.config import (
     EXECUTOR_ENV_VAR,
     MUSE_SETTINGS_ENV_VAR,
@@ -70,6 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Hooks fired by the executor's own host session stand down, or distillation recurses."""
     if os.environ.get(EXECUTOR_ENV_VAR):
         return EXIT_OK
+    stdio.use_utf8()
     store: Store | None = None
     try:
         parser = argparse.ArgumentParser(prog="mem-hook")

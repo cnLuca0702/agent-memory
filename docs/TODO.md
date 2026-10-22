@@ -20,6 +20,15 @@
   bounds are needed; current correct replaces the complete list.
 - Review recovery of interrupted multi-file operations outside Git-backed stores.
 
+## Platform follow-ups
+
+- Render setup/doctor checks as code, status and detail in text mode; the recall-hit line
+  renderer prints them as empty `name — abstract · path · score=None` rows on every platform.
+- Pass the Claude Code text-protocol system prompt by file as the tool posture already does;
+  an inline argument can exceed the Windows command-line limit for long prompts.
+- Confirm on a live Codex Windows install which shell runs user hooks and that the rendered
+  hook command executes there after the one-time trust review.
+
 ## Executor follow-ups
 
 - Persist a per-run Write trace (messages, tool calls, operations, usage), add explicit cache
