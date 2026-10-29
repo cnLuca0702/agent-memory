@@ -227,3 +227,12 @@ def test_a_hand_edited_file_with_crlf_line_endings_can_still_be_corrected(seeded
 
     assert corrected.abstract == "Markdown files are the truth"
     assert seeded.find("file-truth-invariant").abstract == "Markdown files are the truth"
+
+
+@pytest.mark.parametrize("name", ["true", "null", "1e3", "infinity"])
+def test_record_survives_repeated_rewrites_with_scalar_like_slug_and_quoted_abstract(store, name):
+    written = store.record(type="fact", name=name, abstract='Note: he said "hi"')
+    text = written.path.read_text(encoding="utf-8")
+    reread = MemoryRecord.from_text(text)
+    assert (reread.name, reread.abstract) == (written.name, written.abstract)
+    assert reread.to_text() == text
