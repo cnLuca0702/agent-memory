@@ -16,6 +16,7 @@ from .paths import StoreLayout
 from .record import MemoryRecord
 from .schema import SchemaRegistry
 from .search_index import SearchIndex
+from .tokenization import TOKENIZER_ASCII
 from .vector_index import VectorIndex
 
 
@@ -104,7 +105,9 @@ class Indexer:
             return False
         with self._database.connect() as connection:
             stored = IndexMeta(connection).tokenizer()
-        return stored is not None and stored != self._config.index.tokenizer
+        if stored is None:
+            return self._config.index.tokenizer != TOKENIZER_ASCII
+        return stored != self._config.index.tokenizer
 
     def _present_hashes(self) -> dict[str, str]:
         present: dict[str, str] = {}

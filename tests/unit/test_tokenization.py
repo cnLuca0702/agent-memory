@@ -2,6 +2,7 @@
 
 import pytest
 from agent_memory.core.config import Config
+from agent_memory.core.database import Database
 from agent_memory.core.recall import Recall
 from agent_memory.core.search_index import to_match_query
 from agent_memory.core.store import Store
@@ -144,5 +145,32 @@ def test_switching_tokenizer_rebuilds_the_projection(tmp_path, clock):
         body="an unrelated english body.",
         name="another",
     )
+    hits = Recall(store).recall("构件命名")
+    assert "naming-convention" in [hit.name for hit in hits]
+
+
+def test_enabling_cjk_rebuilds_a_legacy_projection_without_tokenizer_metadata(
+    tmp_path, clock
+):
+    config = Config.default()
+    store = Store(tmp_path / "store", config=config, clock=clock, agent="test-agent")
+    store.init()
+    store.record(
+        abstract="构件命名采用 wc 格式",
+        type="decision",
+        body="数字孪生项目的构件命名规范。",
+        name="naming-convention",
+    )
+    with Database(store.layout).connect() as connection:
+        connection.execute("DELETE FROM index_meta")
+
+    config.index.tokenizer = TOKENIZER_CJK
+    store.record(
+        abstract="another memory",
+        type="fact",
+        body="an unrelated english body.",
+        name="another",
+    )
+
     hits = Recall(store).recall("构件命名")
     assert "naming-convention" in [hit.name for hit in hits]
