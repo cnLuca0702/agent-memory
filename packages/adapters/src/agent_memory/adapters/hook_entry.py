@@ -6,7 +6,9 @@ in exit code 0 and any trouble goes to the store's own log.
 
 from __future__ import annotations
 
+import _thread
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -14,16 +16,21 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from types import FrameType
 
-from agent_memory.core import injection
-from agent_memory.core.config import EXECUTOR_ENV_VAR, STORE_ENV_VAR
+from agent_memory.core import injection, stdio
+from agent_memory.core.config import (
+    EXECUTOR_ENV_VAR,
+    MUSE_SETTINGS_ENV_VAR,
+    STORE_ENV_VAR,
+)
 from agent_memory.core.store import Store
 
 from . import capture as capture_module
-from . import moments, transcript
+from . import detached, moments, muse_session, transcript
 
 EXIT_OK = 0
 LOG_FILENAME = "hooks.log"
@@ -33,6 +40,8 @@ KEY_EVENT_CLAUDE = "hook_event_name"
 KEY_EVENT_GENERIC = "event"
 KEY_HOST = "host"
 KEY_ITEMS = "items"
+KEY_MUSE_DATA_HOME = "muse_data_home"
+KEY_MUSE_SETTINGS = "muse_settings"
 CLAUDE_OUTPUT_KEY = "hookSpecificOutput"
 CLAUDE_CONTEXT_KEY = "additionalContext"
 CLAUDE_EVENT_OUTPUT_KEY = "hookEventName"
@@ -40,12 +49,17 @@ KEY_DISTILL = "distill"
 DISTILL_LAUNCHED = "launched"
 DISTILL_SKIPPED = "skipped"
 SESSION_FLAG = "--session"
-REASON_HOST_FLAG = "--reason-host"
+SOURCE_HOST_FLAG = "--source-host"
 HOST_FLAG = "--host"
+STORE_FLAG = "--store"
+MUSE_DATA_HOME_FLAG = "--muse-data-home"
+MUSE_SETTINGS_FLAG = "--muse-settings"
 EXECUTOR_BINARY = "mem"
+AUTO_DREAM_FLAG = "--auto-dream"
 PRINTED_KEYS = (CLAUDE_OUTPUT_KEY, CLAUDE_CONTEXT_KEY)
 
 Launcher = Callable[[Store, str, str], bool]
+DreamLauncher = Callable[[Store, str], object]
 
 
 class _Timeout(Exception):
@@ -56,35 +70,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Hooks fired by the executor's own host session stand down, or distillation recurses."""
     if os.environ.get(EXECUTOR_ENV_VAR):
         return EXIT_OK
+    stdio.use_utf8()
     store: Store | None = None
     try:
         parser = argparse.ArgumentParser(prog="mem-hook")
         parser.add_argument(HOST_FLAG, default=moments.HOST_CLAUDE_CODE)
-        host = parser.parse_known_args(argv)[0].host
-        event = json.loads(sys.stdin.read() or "{}")
-        event.setdefault(KEY_HOST, host)
-        store = Store(event.get("store"), agent=str(event.get("agent") or "hook"))
-        _arm(store.config.write.hook_timeout_seconds)
-        response = handle(store, event)
+        parser.add_argument(STORE_FLAG, default="")
+        parser.add_argument(MUSE_DATA_HOME_FLAG, default="")
+        parser.add_argument(MUSE_SETTINGS_FLAG, default="")
+        args = parser.parse_args(argv or ())
+        event = normalize_event(json.loads(sys.stdin.read() or "{}"), args.host)
+        if args.store:
+            event["store"] = args.store
+        if args.muse_data_home:
+            event[KEY_MUSE_DATA_HOME] = args.muse_data_home
+        if args.muse_settings:
+            event[KEY_MUSE_SETTINGS] = args.muse_settings
+            os.environ[MUSE_SETTINGS_ENV_VAR] = args.muse_settings
+        store_value = event.get("store")
+        store = Store(
+            str(store_value) if store_value else None,
+            agent=str(event.get("agent") or "hook"),
+        )
+        with _time_bound(store.config.write.hook_timeout_seconds):
+            response = handle(store, event)
         if any(key in response for key in PRINTED_KEYS):
             print(json.dumps(response))
     except Exception:
         _log(store, traceback.format_exc())
-    finally:
-        _disarm()
     return EXIT_OK
 
 
 def handle(
-    store: Store, event: dict[str, object], launch: Launcher | None = None
+    store: Store,
+    event: dict[str, object],
+    launch: Launcher | None = None,
+    dream_launch: DreamLauncher | None = None,
 ) -> dict[str, object]:
     host = str(event.get(KEY_HOST) or moments.HOST_CLAUDE_CODE)
     raw_event = str(event.get(KEY_EVENT_CLAUDE) or event.get(KEY_EVENT_GENERIC) or "")
     moment = moments.moment_for(host, raw_event)
     if moment == moments.MOMENT_INJECT:
-        return _inject(store, host)
+        response = _inject(store, host)
+        (dream_launch or _launch_dream)(store, host)
+        return response
     if moment in (moments.MOMENT_PAUSE, moments.MOMENT_EVICT):
-        return _boundary(store, event, host, moment, launch or launch_distill)
+        return _boundary(
+            store,
+            event,
+            host,
+            moment,
+            launch or launch_distill,
+            dream_launch or _launch_dream,
+        )
     return {}
 
 
@@ -99,11 +137,23 @@ def _inject(store: Store, host: str) -> dict[str, object]:
                 CLAUDE_CONTEXT_KEY: context,
             }
         }
+    if host == moments.HOST_MUSE_CODE:
+        return {
+            CLAUDE_OUTPUT_KEY: {
+                CLAUDE_EVENT_OUTPUT_KEY: "SessionStart",
+                CLAUDE_CONTEXT_KEY: context,
+            }
+        }
     return {CLAUDE_CONTEXT_KEY: context}
 
 
 def _boundary(
-    store: Store, event: dict[str, object], host: str, moment: str, launch: Launcher
+    store: Store,
+    event: dict[str, object],
+    host: str,
+    moment: str,
+    launch: Launcher,
+    dream_launch: DreamLauncher,
 ) -> dict[str, object]:
     session = str(event.get(KEY_SESSION) or "")
     if not session:
@@ -111,6 +161,7 @@ def _boundary(
     items = _items(event)
     result = capture_module.capture(store, session, items, source=moment)
     if result.is_empty():
+        dream_launch(store, host)
         return {}
     launched = store.config.write.distill_on_boundary and launch(store, session, host)
     return {
@@ -123,6 +174,12 @@ def _boundary(
     }
 
 
+def _launch_dream(store: Store, _host: str) -> object:
+    from . import auto_dream
+
+    return auto_dream.launch(store, trigger_source="hook")
+
+
 def launch_distill(store: Store, session: str, host: str) -> bool:
     """The executor runs in its own process so the host's turn ends without waiting on it.
 
@@ -132,46 +189,86 @@ def launch_distill(store: Store, session: str, host: str) -> bool:
     if not command:
         return False
     if command[0] == EXECUTOR_BINARY:
-        command[0] = _sibling(EXECUTOR_BINARY)
+        command[0] = detached.installed(EXECUTOR_BINARY)
     environment = {**os.environ, STORE_ENV_VAR: str(store.root), EXECUTOR_ENV_VAR: "1"}
     try:
-        subprocess.Popen(
-            [*command, SESSION_FLAG, session, REASON_HOST_FLAG, host],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        store.layout.state_dir.mkdir(parents=True, exist_ok=True)
+        with (store.layout.state_dir / LOG_FILENAME).open("a", encoding="utf-8") as log:
+            subprocess.Popen(
+                [*command, SESSION_FLAG, session, SOURCE_HOST_FLAG, host, AUTO_DREAM_FLAG],
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                **detached.options(),
+            )
     except OSError:
         return False
     return True
 
-
-def _sibling(binary: str) -> str:
-    """Desktop clients run hooks without the user's shell PATH; the install directory is known."""
-    candidate = pathlib.Path(sys.executable).parent / binary
-    return str(candidate) if candidate.exists() else binary
 
 
 def _items(event: dict[str, object]) -> list[str]:
     supplied = event.get(KEY_ITEMS)
     if isinstance(supplied, list):
         return [str(item) for item in supplied]
+    host = str(event.get(KEY_HOST) or "")
     path = event.get(KEY_TRANSCRIPT)
-    return transcript.items(pathlib.Path(str(path))) if path else []
+    if host == moments.HOST_MUSE_CODE and not path:
+        data_home = event.get(KEY_MUSE_DATA_HOME)
+        path = muse_session.path_for(
+            str(event.get(KEY_SESSION) or ""),
+            data_home=pathlib.Path(str(data_home)) if data_home else None,
+        )
+    found = (
+        transcript.items(pathlib.Path(str(path)), host=host)
+        if path
+        else []
+    )
+    if host == moments.HOST_MUSE_CODE and found:
+        final = str(event.get("last_assistant_message") or "").strip()
+        rendered = f"assistant: {final}" if final else ""
+        if rendered and rendered not in found:
+            found.append(rendered)
+    return found
 
 
-def _arm(seconds: float) -> None:
-    def _raise(signum: int, frame: FrameType | None) -> None:
-        raise _Timeout()
+def normalize_event(event: object, host: str = "") -> dict[str, object]:
+    """Attach adapter identity while retaining fields used by the common hook model."""
+    if not isinstance(event, dict):
+        raise TypeError("hook payload must be a JSON object")
+    normalized = dict(event)
+    if host:
+        normalized[KEY_HOST] = host
+    return normalized
 
-    signal.signal(signal.SIGALRM, _raise)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
+
+def _raise_timeout(signum: int, frame: FrameType | None) -> None:
+    raise _Timeout()
 
 
-def _disarm() -> None:
-    signal.setitimer(signal.ITIMER_REAL, 0)
+@contextlib.contextmanager
+def _time_bound(seconds: float) -> Iterator[None]:
+    """The POSIX interval timer also interrupts blocking calls; elsewhere a watchdog thread does."""
+    if sys.platform != "win32":
+        previous = signal.signal(signal.SIGALRM, _raise_timeout)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            yield
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+        return
+    previous = signal.signal(signal.SIGINT, _raise_timeout)
+    watchdog = threading.Timer(seconds, _thread.interrupt_main)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        yield
+    finally:
+        watchdog.cancel()
+        watchdog.join()
+        signal.signal(signal.SIGINT, previous)
 
 
 def _log(store: Store | None, message: str) -> None:
@@ -185,5 +282,9 @@ def _log(store: Store | None, message: str) -> None:
         return
 
 
+def cli() -> int:
+    return main(sys.argv[1:])
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(cli())

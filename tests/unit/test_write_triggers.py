@@ -2,10 +2,14 @@
 
 import io
 import json
+import os
+import pathlib
+import shlex
+import sys
 
 import pytest
 from agent_memory.adapters import capture as capture_module
-from agent_memory.adapters import hook_entry, moments, setup, transcript
+from agent_memory.adapters import detached, hook_entry, moments, setup, transcript
 from agent_memory.core import injection, sessions, triggers
 from agent_memory.core.watermark import Watermark
 
@@ -198,15 +202,37 @@ def test_the_launched_executor_call_is_one_the_cli_accepts(store, monkeypatch):
     launched = {}
 
     def fake_popen(command, **kwargs):
-        launched.update(command=command, env=kwargs["env"])
+        launched.update(
+            command=command,
+            env=kwargs["env"],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+            kwargs=kwargs,
+        )
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
     assert hook_entry.launch_distill(store, "session-x", moments.HOST_CODEX)
+    assert detached.options().items() <= launched["kwargs"].items()
     args = _parser().parse_args(launched["command"][1:])
     assert args.session == ["session-x"]
-    assert args.reason_host == moments.HOST_CODEX
+    assert args.source_host == moments.HOST_CODEX
+    assert args.reason_host is None
     assert launched["env"][STORE_ENV_VAR] == str(store.root)
     assert launched["env"][EXECUTOR_ENV_VAR]
+    expected_log = store.layout.state_dir / hook_entry.LOG_FILENAME
+    assert pathlib.Path(launched["stdout"].name) == expected_log
+    assert launched["stderr"] is launched["stdout"]
+
+
+def test_the_launched_executor_resolves_from_the_install_without_path(store, monkeypatch):
+    launched = {}
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr("subprocess.Popen", lambda command, **_: launched.update(command=command))
+
+    assert hook_entry.launch_distill(store, "session-x", moments.HOST_CLAUDE_CODE)
+    executable = pathlib.Path(launched["command"][0])
+    assert executable.is_file()
+    assert executable.parent == pathlib.Path(sys.executable).parent
 
 
 def test_a_hook_fired_inside_the_executor_session_does_nothing(store, monkeypatch, capsys):
@@ -234,6 +260,40 @@ def test_the_hook_takes_its_host_from_the_command_line(store, monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
     hook_entry.main(["--host", moments.HOST_CODEX])
     assert hosts == [moments.HOST_CODEX]
+
+
+def test_muse_hook_passes_pinned_settings_to_background_distillation(store, monkeypatch):
+    from agent_memory.core.config import MUSE_SETTINGS_ENV_VAR
+
+    settings = store.root / "isolated muse" / "settings.json"
+    observed = []
+
+    def launch(*_args):
+        observed.append(hook_entry.os.environ.get(MUSE_SETTINGS_ENV_VAR))
+        return True
+
+    event = {
+        "event": "Stop",
+        "session_id": "muse-session",
+        "items": SEGMENTS,
+        "store": str(store.root),
+    }
+    monkeypatch.delenv(MUSE_SETTINGS_ENV_VAR, raising=False)
+    monkeypatch.setattr(hook_entry, "launch_distill", launch)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
+
+    assert (
+        hook_entry.main(
+            [
+                "--host",
+                moments.HOST_MUSE_CODE,
+                "--muse-settings",
+                str(settings),
+            ]
+        )
+        == hook_entry.EXIT_OK
+    )
+    assert observed == [str(settings)]
 
 
 def test_codex_rollout_transcripts_yield_the_conversation(tmp_path):
@@ -276,7 +336,20 @@ def test_setup_writes_an_absolute_hook_command_and_installs_the_skill(tmp_path, 
     hooks = json.loads(settings.read_text(encoding="utf-8"))["hooks"]
     assert set(hooks) == set(moments.DIALECTS[host])
     command = hooks["Stop"][0]["hooks"][0]["command"]
-    executable = command.split()[0]
-    assert executable.endswith(setup.HOOK_COMMAND) and executable.startswith("/")
+    executable, *arguments = shlex.split(command)
+    assert pathlib.Path(executable).stem == setup.HOOK_COMMAND
+    assert pathlib.Path(executable).is_absolute() and pathlib.Path(executable).exists()
+    assert arguments == [setup.HOST_FLAG, host]
     skill = settings.parent / "skills" / "agent-memory" / "SKILL.md"
     assert skill.read_text(encoding="utf-8") == prompts.skill()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows hook command rendering")
+def test_windows_hook_commands_mean_the_same_in_bash_powershell_and_cmd(tmp_path):
+    store_root = tmp_path / "store with space"
+    command = setup.hook_command(moments.HOST_CODEX, store_root)
+
+    assert "\\" not in command and "'" not in command
+    plain = command.split(f" {setup.STORE_FLAG} ")[0]
+    assert '"' not in plain
+    assert shlex.split(command)[-1] == store_root.resolve().as_posix()
