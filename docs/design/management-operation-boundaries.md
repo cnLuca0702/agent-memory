@@ -60,3 +60,7 @@ An externally edited memory that fails validation leaves the retrieval projectio
 A memory validity interval cannot end before its start. Direct writes reject reversed intervals before publishing the Markdown projection and preserve the previous truth file.
 
 The in-memory schema projection tracks schema file content. A long-lived store observes external edits, additions and removals instead of continuing to route writes using stale schema definitions.
+
+The injected index keeps fitting lower-priority memories when an earlier entry exceeds the remaining byte budget. Oversized entries cannot suppress the entire remaining recall surface.
+
+The root index byte budget includes its header. If a configured header cannot fit, the projection is empty rather than exceeding the budget.
