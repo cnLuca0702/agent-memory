@@ -12,9 +12,10 @@ import hashlib
 import json
 import os
 import pathlib
-import re
 import time
 import uuid
+
+from . import redaction
 
 ENV = "AGENT_MEMORY_OBSERVATION_DIR"
 ATTEMPT_ENV = "AGENT_MEMORY_OBSERVATION_ATTEMPT"
@@ -29,13 +30,12 @@ HOST_EVENT_BYTES = 1024 * 1024
 TOOL_EVENT_BYTES = 65536
 LIMIT_MARKER_RESERVE = 128
 _call = contextvars.ContextVar("memory_observation_call", default="")
-_secret = re.compile(r"(?i)(bearer\s+|(?:api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s,\"']+")
 
 
 def bounded(value, text_limit: int = MAX_TEXT):
     """Bound every variable-length field; retain hashes/counts for incomplete evidence."""
     if isinstance(value, str):
-        clean = _secret.sub(r"\1[REDACTED]", value)
+        clean = redaction.redact(value)
         if len(clean) <= text_limit:
             return clean
         return {
