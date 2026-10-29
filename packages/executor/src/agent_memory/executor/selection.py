@@ -7,6 +7,9 @@ import dataclasses
 from agent_memory.core.config import (
     REASONER_ENDPOINT,
     REASONER_HOST,
+    TOOL_MODE_AUTO,
+    TOOL_MODE_NATIVE,
+    TOOL_MODE_TEXT,
     ExecutorConfig,
     OperationExecutorConfig,
 )
@@ -16,6 +19,7 @@ WRITE = "write"
 MANAGE = "manage"
 OPERATIONS = (WRITE, MANAGE)
 SOURCE = "source"
+NATIVE_MANAGE_HOSTS = ("codex", "hermes", "muse-code")
 
 
 def resolve(
@@ -30,16 +34,27 @@ def resolve(
     if operation not in OPERATIONS:
         raise ReasonerUnavailableError(f"unsupported memory operation: {operation}")
     policy: OperationExecutorConfig = getattr(config, operation)
+    if operation == MANAGE and policy.tool_mode not in ("", TOOL_MODE_NATIVE, TOOL_MODE_TEXT):
+        raise ReasonerUnavailableError(
+            f"unsupported Manage tool mode {policy.tool_mode!r}; use native or text"
+        )
     chosen = dataclasses.replace(
         config,
         reasoner=policy.reasoner or config.reasoner,
         host=policy.host or config.host,
+        host_provider=policy.host_provider or config.host_provider,
+        host_allow_data_training=(
+            policy.host_allow_data_training or config.host_allow_data_training
+        ),
         host_model=policy.host_model or config.host_model,
         model=policy.model or config.model,
         endpoint=policy.endpoint or config.endpoint,
         project=policy.project or config.project,
         location=policy.location or config.location,
         timeout_seconds=policy.timeout_seconds or config.timeout_seconds,
+        tool_mode=(policy.tool_mode or config.tool_mode)
+        if operation == WRITE
+        else (policy.tool_mode or TOOL_MODE_TEXT),
     )
 
     selected_host = chosen.host
@@ -67,6 +82,21 @@ def resolve(
             chosen = dataclasses.replace(chosen, host_model=model)
     if chosen.reasoner not in (REASONER_HOST, REASONER_ENDPOINT):
         raise ReasonerUnavailableError(f"unsupported reasoner {chosen.reasoner!r} for {operation}")
+    if (
+        operation == WRITE
+        and chosen.reasoner == REASONER_ENDPOINT
+        and chosen.tool_mode != TOOL_MODE_AUTO
+    ):
+        raise ReasonerUnavailableError("write tool_mode applies only to host reasoners")
     if chosen.reasoner == REASONER_HOST and not chosen.host.strip():
         raise ReasonerUnavailableError(f"{operation} host reasoner requires a host")
+    if operation == MANAGE and chosen.tool_mode == TOOL_MODE_NATIVE:
+        if chosen.reasoner != REASONER_HOST:
+            raise ReasonerUnavailableError(
+                "native Manage review currently requires a host reasoner"
+            )
+        if chosen.host not in NATIVE_MANAGE_HOSTS:
+            raise ReasonerUnavailableError(
+                "native Manage review currently supports only " + ", ".join(NATIVE_MANAGE_HOSTS)
+            )
     return chosen

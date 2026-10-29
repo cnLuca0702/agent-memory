@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import subprocess
 
 import pytest
@@ -51,9 +52,83 @@ def test_fresh_and_repeated_setup_share_one_idempotent_pipeline(tmp_path, monkey
     assert (store.root / "config.toml").is_file()
     assert setup.skill_path(host, target).read_text(encoding="utf-8") == prompts.skill()
     for event in moments.DIALECTS[host]:
-        rendered = json.dumps(configured["hooks"][event])
-        assert rendered.count(f"mem-hook --host {host}") == 1
-        assert str(store.root) in rendered
+        entries = configured["hooks"][event]
+        commands = [hook["command"] for entry in entries for hook in entry["hooks"]]
+        assert len(commands) == 1
+        words = shlex.split(commands[0])
+        assert pathlib.Path(words[0]).stem == setup.HOOK_COMMAND
+        assert words[1:3] == [setup.HOST_FLAG, host]
+        assert pathlib.Path(words[words.index(setup.STORE_FLAG) + 1]) == store.root
+
+
+def test_successful_host_setup_sets_the_default_manual_sleep_host(tmp_path, monkeypatch):
+    target = tmp_path / "codex" / "hooks.json"
+    store = Store(tmp_path / "store")
+    monkeypatch.setattr(setup, "probe", lambda selected: f"{selected} 1.0")
+
+    report = host_setup.run(store, moments.HOST_CODEX, settings_path=target)
+
+    assert report["status"] == doctor.READY
+    configured = Store(store.root).config.executor
+    assert configured.host == moments.HOST_CLAUDE_CODE
+    assert configured.manage == OperationExecutorConfig(
+        reasoner="host",
+        host=moments.HOST_CODEX,
+    )
+
+
+def test_host_setup_does_not_replace_an_explicit_endpoint_reasoner(tmp_path, monkeypatch):
+    target = tmp_path / "codex" / "hooks.json"
+    store = Store(tmp_path / "store")
+    store.init()
+    store.config.executor.reasoner = "endpoint"
+    store.config.executor.host = moments.HOST_CLAUDE_CODE
+    store.config.save(store.root)
+    monkeypatch.setattr(setup, "probe", lambda selected: f"{selected} 1.0")
+
+    host_setup.run(store, moments.HOST_CODEX, settings_path=target)
+
+    configured = Store(store.root).config.executor
+    assert configured.reasoner == "endpoint"
+    assert configured.host == moments.HOST_CLAUDE_CODE
+
+
+def test_host_setup_preserves_an_explicit_manage_policy(tmp_path, monkeypatch):
+    target = tmp_path / "codex" / "hooks.json"
+    store = Store(tmp_path / "store")
+    store.init()
+    store.config.executor.manage = OperationExecutorConfig(
+        reasoner="endpoint",
+        endpoint="https://manage.example/v1",
+    )
+    store.config.save(store.root)
+    monkeypatch.setattr(setup, "probe", lambda selected: f"{selected} 1.0")
+
+    host_setup.run(store, moments.HOST_CODEX, settings_path=target)
+
+    configured = Store(store.root).config.executor.manage
+    assert configured.reasoner == "endpoint"
+    assert configured.endpoint == "https://manage.example/v1"
+
+
+def test_failed_host_setup_does_not_persist_a_seeded_manage_policy(tmp_path, monkeypatch):
+    target = tmp_path / "codex" / "hooks.json"
+    store = Store(tmp_path / "store")
+    monkeypatch.setattr(setup, "probe", lambda selected: f"{selected} 1.0")
+    monkeypatch.setattr(
+        doctor,
+        "_live_reasoner_check",
+        lambda _store, _host, operation: doctor.Check(
+            f"{operation.upper()}_REASONER_LIVE_FAILED",
+            False,
+            "fixture failure",
+        ),
+    )
+
+    report = host_setup.run(store, moments.HOST_CODEX, settings_path=target)
+
+    assert report["status"] == doctor.FAILED
+    assert Store(store.root).config.executor.manage == OperationExecutorConfig()
 
 
 @pytest.mark.parametrize("host", HOSTS)
@@ -123,7 +198,9 @@ def test_muse_openrouter_routing_and_mcp_merge_without_replacing_other_config(tm
         "auth": "bearer",
     }
     assert configured["mcp_servers"]["other"] == {"command": "other"}
-    assert str(store.resolve()) in json.dumps(configured["mcp_servers"]["agent-memory"])
+    assert str(store.resolve()) in json.dumps(
+        configured["mcp_servers"]["agent-memory"], ensure_ascii=False
+    ).replace("\\\\", "\\")
 
 
 @pytest.mark.parametrize(
@@ -186,9 +263,9 @@ def test_muse_doctor_rejects_hook_without_pinned_settings(tmp_path, monkeypatch)
     configured = json.loads(target.read_text(encoding="utf-8"))
     for entries in configured["hooks"].values():
         command = entries[0]["hooks"][0]["command"]
-        entries[0]["hooks"][0]["command"] = command.replace(
-            f" {setup.MUSE_SETTINGS_FLAG} {target.resolve()}", ""
-        )
+        pinned = setup.render_command([setup.MUSE_SETTINGS_FLAG, str(target.resolve())])
+        assert f" {pinned}" in command
+        entries[0]["hooks"][0]["command"] = command.replace(f" {pinned}", "")
     target.write_text(json.dumps(configured), encoding="utf-8")
     monkeypatch.setattr(setup, "probe", lambda _host: "Muse 1.4")
     monkeypatch.setattr(openrouter, "detect_credential", lambda _env=None: None)
